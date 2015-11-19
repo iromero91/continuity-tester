@@ -1,0 +1,8 @@
+# Ignores for kicad projects
+*.net
+*.bak
+*.bck
+*.kicad-pcb-bak
+*-cache.lib
+*.raw
+*.log
