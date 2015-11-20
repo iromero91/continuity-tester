@@ -37,14 +37,14 @@
 #define IDLE_TIME 5000 /* ~100s */
 
 // Continuity test constants
-#define OPEN_TRESHOLD 3  /* ~200Ω */
-#define SHORT_TRESHOLD 2 /* ~150Ω */
+#define OPEN_TRESHOLD (3<<6)  /* ~200Ω */
+#define SHORT_TRESHOLD (2<<6) /* ~150Ω */
 #define LATCH_TIME 4     /* ~60ms */
 
 // Diode test constants
-#define DIODE_TRESHOLD_MAX 250 /* ~0.7v */
-#define DIODE_TRESHOLD_MIN 25  /* ~0.075v */
-#define DIODE_BEEP_TIME 7     /* ~0.25s */
+#define DIODE_TRESHOLD_MAX (290<<6) /* ~0.7v */
+#define DIODE_TRESHOLD_MIN (25<<6)  /* ~0.075v */
+#define DIODE_BEEP_TIME 7     /* ~0.12s */
 
 // Tester states
 typedef enum state_t {
@@ -81,6 +81,7 @@ void adc_init() {
     ADCON0bits.VCFG = 0; // Reference tied to VCC
 }
 
+// Time: 2.6ms sample acq, 5.7ms including call.
 uint16_t adc_read () {
     // Acquire ADC sample
     ADCON0bits.CHS = 0;  // Channel 0 (GP0)
@@ -88,18 +89,19 @@ uint16_t adc_read () {
     ADCON0bits.GO = 1; // Start conversion
     while (ADCON0bits.GO_nDONE) NOP(); // Wait for result
     ADCON0bits.ADON = 0; // Turn off ADC
-    return (ADRESH<<2) + (ADRESL>>6);
+    return (ADRESH<<8) + ADRESL;
 }
 
-void blink_mode(uint16_t time, uint8_t mode) {
-    uint8_t t = time & 127;
-    if (t > 128 - mode * 16) {
-        GPIObits.GP5 = ((t & 15) < 5)? 1 : 0;
+// Time: 3.2ms including call
+void blink_mode(uint8_t t, uint8_t mode) {
+    if (t < mode) {
+        GPIObits.GP5 = ((t & 8) && (t & 4))? 1 : 0;
     } else {
         GPIObits.GP5 = 0;
     }
 }
 
+// Time: 1.5ms
 uint8_t check_button() {
     static int8_t Debounce = 0;
     if (GPIObits.GP3 == 0) {
@@ -162,7 +164,7 @@ void state_continuity_idle() {
     /*** In State ***/
     while(time < IDLE_TIME) {  // Go back to sleep if idling too long
         if (State == ST_CONTINUITY_IDLE) {
-            blink_mode(time, 1);
+            blink_mode(time&127, 1*16);
             if (check_button()){
                 next = ST_INVERSE_IDLE; // Cycle to next mode
                 break;
@@ -171,7 +173,7 @@ void state_continuity_idle() {
                 break;
             }
         } else { // ST_INVERSE_IDLE
-            blink_mode(time, 2);
+            blink_mode(time&127, 2*16);
             if (check_button()){
                 next = ST_DIODE_IDLE; // Cycle to next mode
                 break;
@@ -278,7 +280,7 @@ void state_diode_idle() {
 
     /*** In State ***/
     while(time < IDLE_TIME) { // Go back to sleep if idling too long
-        blink_mode(time, 3);
+        blink_mode(time&127, 3*16);
         if (check_button()) {
             next = ST_CONTINUITY_IDLE;  // Cycle to next mode
             break;
