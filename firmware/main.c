@@ -22,16 +22,22 @@
 #include <xc.h>
 #include <stdint.h>
 
-// CONFIG
-#pragma config FOSC = INTOSCIO  // Oscillator Selection bits (INTOSCIO oscillator: I/O function on RA4/OSC2/CLKOUT pin, I/O function on RA5/OSC1/CLKIN)
-#pragma config WDTE = OFF       // Watchdog Timer Enable bit (WDT disabled)
-#pragma config PWRTE = ON       // Power-up Timer Enable bit (PWRT enabled)
-#pragma config MCLRE = OFF      // MCLR Pin Function Select bit (MCLR pin function is digital input, MCLR internally tied to VDD)
-#pragma config CP = OFF         // Code Protection bit (Program memory code protection is disabled)
-#pragma config CPD = OFF        // Data Code Protection bit (Data memory code protection is disabled)
-#pragma config BOREN = OFF      // Brown Out Detect (BOR disabled)
-#pragma config IESO = OFF       // Internal External Switchover bit (Internal External Switchover mode is disabled)
-#pragma config FCMEN = OFF      // Fail-Safe Clock Monitor Enabled bit (Fail-Safe Clock Monitor is disabled)
+// CONFIG1
+#pragma config FOSC = INTOSC    //  (INTOSC oscillator; I/O function on CLKIN pin)
+#pragma config WDTE = OFF       // Watchdog Timer Enable (WDT disabled)
+#pragma config PWRTE = OFF      // Power-up Timer Enable (PWRT disabled)
+#pragma config MCLRE = OFF      // MCLR Pin Function Select (MCLR/VPP pin function is digital input)
+#pragma config CP = OFF         // Flash Program Memory Code Protection (Program memory code protection is disabled)
+#pragma config BOREN = OFF      // Brown-out Reset Enable (Brown-out Reset disabled)
+#pragma config CLKOUTEN = OFF   // Clock Out Enable (CLKOUT function is disabled. I/O or oscillator function on the CLKOUT pin)
+
+// CONFIG2
+#pragma config WRT = OFF        // Flash Memory Self-Write Protection (Write protection off)
+#pragma config PLLEN = OFF      // PLL Enable (4x PLL disabled)
+#pragma config STVREN = OFF     // Stack Overflow/Underflow Reset Enable (Stack Overflow or Underflow will not cause a Reset)
+#pragma config BORV = LO        // Brown-out Reset Voltage Selection (Brown-out Reset Voltage (Vbor), low trip point selected.)
+#pragma config LPBOREN = OFF    // Low Power Brown-out Reset enable bit (LPBOR is disabled)
+#pragma config LVP = OFF        // Low-Voltage Programming Enable (High-voltage on MCLR/VPP must be used for programming)
 
 // Time before falling into sleep mode
 #define IDLE_TIME 5000 /* ~100s */
@@ -45,6 +51,9 @@
 #define DIODE_TRESHOLD_MAX (290<<6) /* ~0.7v */
 #define DIODE_TRESHOLD_MIN (25<<6)  /* ~0.075v */
 #define DIODE_BEEP_TIME 7     /* ~0.12s */
+
+#define BEEP_FREQ 1333.33
+#define BEEP_PERIOD (31000 / BEEP_FREQ)
 
 // Tester states
 typedef enum state_t {
@@ -61,24 +70,24 @@ typedef enum state_t {
 static state_t State;  // Current state
 
 void beep() {
-    T2CON = 0; // No prescaler or postscaler on timer 2
-    PR2 = 5; // 7.75KHz/(5+1) = 1.292KHz tone signal
-    T2CONbits.TMR2ON = 1; // Turn timer 2 on
-    CCPR1L = 3; // 50% duty cycle (3)
-    CCP1CONbits.DC1B = 0; // (0) lsb
-    CCP1CONbits.CCP1M = 0b1100; // PWM Active High
+    PWM3CON    = 0b11000000; // Enable PWM
+    PWM3CLKCON = 0b00000010; // LFINTOSC clock source, no prescaler
+    PWM3PH = 0;
+    PWM3PR = BEEP_PERIOD; // Set oscillator period
+    PWM3DC = BEEP_PERIOD / 2; // 50% duty cycle
+    PWM3LDCONbits.PWM3LD = 1; // Load registers!
 }
 
 void unbeep() {
-    T2CONbits.TMR2ON = 0; // Timer 2 off
-    CCP1CONbits.CCP1M = 0; // CCP off
+    PWM3CON = 0; // PWM 3 OFF
+    PWM3CLKCON = 0;
 }
 
 void adc_init() {
-    ANSELbits.ADCS = 0b011; // Use free running ADC clock source
-    ANSELbits.ANS = 0b0001; // Use AN0 for ADC, all other pins digital
-    ADCON0bits.ADFM = 0; // LEFT justified format
-    ADCON0bits.VCFG = 0; // Reference tied to VCC
+    ANSELA = 0b00000001; // Use AN0
+    ADCON1bits.ADCS = 0b111; // Use FRC clock
+    ADCON1bits.ADFM = 0; // LEFT justified format
+    ADCON1bits.ADPREF = 0b00; // Reference tied to VCC
 }
 
 // Time: 2.6ms sample acq, 5.7ms including call.
@@ -92,19 +101,17 @@ uint16_t adc_read () {
     return (ADRESH<<8) + ADRESL;
 }
 
-// Time: 3.2ms including call
 void blink_mode(uint8_t t, uint8_t mode) {
     if (t < mode) {
-        GPIObits.GP5 = ((t & 8) && (t & 4))? 1 : 0;
+        LATAbits.LATA5 = ((t & 8) && (t & 4))? 1 : 0;
     } else {
-        GPIObits.GP5 = 0;
+        LATAbits.LATA5 = 0;
     }
 }
 
-// Time: 1.5ms
 uint8_t check_button() {
     static int8_t Debounce = 0;
-    if (GPIObits.GP3 == 0) {
+    if (PORTAbits.RA3 == 0) {
         if (Debounce >= 0) Debounce++;
     } else {
         Debounce = 0;
@@ -122,28 +129,34 @@ uint8_t check_button() {
 void state_sleep() {
     /*** Enter State ***/
     // Configure IO
-    TRISIO = 0b00011000; // Only enable button (GP3) and probe (GP4) inputs
-    GPIO   = 0b00000011; // Pull up GP0 (27K) and GP1 (10k)
-    IOC    = 0b00011000; // Enable wake up on pin change for probe and button
+    TRISA = 0b00011000; // Only enable button (RA3) and probe (RA4) inputs
+    LATA  = 0b00000011; // Pull up RA0 (27K) and RA1 (10k)
+    IOCAN = 0b00011000; // Enable wake up on negative edge for probe and button
+    WPUA = 0; // No weak pullups
+    OPTION_REGbits.nWPUEN = 1;
+    ODCONA = 0; // All IO is push-pull
+    SLRCONA = 0; // Slew rate at maximum
     // Configure ADC
-    ANSEL  = 0; // All pins digital
+    ANSELA  = 0; // All pins digital
     ADCON0 = 0; // Turn off ADC
     // Configure Comparator Module
-    CMCON0 = 0b00000111; // Use configuration 111, lowest power off
-    // Configure CCP
-    CCP1CON = 0; // CCP1 off
+    CM1CON0 = 0; // Comparator off
+    // Configure PWM
+    PWM3CON = 0; // PWM3 (buzzer) off
+    CWG1CON0 = 0; // CWG off.
     // Configure interrupts
-    INTCONbits.GPIE = 1; // Enable GPIO wake up.
-    INTCONbits.GPIF = 0; // Clear flag
+    INTCONbits.IOCIE = 1; // Enable wake up on pin change.
+    INTCONbits.IOCIF = 0; // Clear flag.
     /*** In State ***/
     do {
         SLEEP(); // Sleep until either the probe or button wakes us up.
         NOP();
-        INTCONbits.GPIF = 0; // Clear flag
-    } while (GPIObits.GP3 && GPIObits.GP4);
+        INTCONbits.IOCIF = 0; // Clear flag
+        IOCAF = 0; // And flags
+    } while (PORTAbits.RA3 && PORTAbits.RA4);
     /*** Exit State ***/
-    INTCONbits.GPIE = 0; // Disable GPIO interrupts
-    IOC = 0;
+    INTCONbits.IOCIE = 0; // Disable GPIO interrupts
+    IOCAN = 0;
     State = ST_CONTINUITY_IDLE;
     return;
 }
@@ -157,8 +170,8 @@ void state_continuity_idle() {
     /*** Enter State ***/
     unbeep(); // Silence BEEP
     // Configure IO
-    TRISIO = 0b00001001; // Set up GP0 (probe) and GP3 (button) as inputs
-    GPIO   = 0b00000010; // Activate bias current for cont. test (22k series R)
+    TRISA = 0b00001001; // Set up GP0 (probe) and GP3 (button) as inputs
+    LATA  = 0b00000010; // Activate bias current for cont. test (22k series R)
     adc_init(); // Configure ADC
 
     /*** In State ***/
@@ -195,7 +208,7 @@ void state_continuity_beep() {
 
     /*** Enter State ***/
     beep(); // Start beeper
-    GPIObits.GP5 = 1; // Turn on LED
+    LATAbits.LATA5 = 1; // Turn on LED
 
     /*** In State ***/
     while(samples < LATCH_TIME) {
@@ -228,7 +241,7 @@ void state_continuity_beep() {
 
 ///// Diode Mode States /////
 
-void state_tes() {
+void state_test_ADC() {
     state_t next = ST_SLEEP;
     uint16_t voltage;
     uint8_t i;
@@ -236,25 +249,25 @@ void state_tes() {
     /*** Enter State ***/
     unbeep(); // Silence BEEP
     // Configure IO
-    TRISIO = 0b00001001; // Set up GP0 (probe) and GP3 (button) as inputs
-    GPIO   = 0b00010000; // Activate bias current for diode test (4k7 series R)
+    TRISA = 0b00001001; // Set up GP0 (probe) and GP3 (button) as inputs
+    LATA  = 0b00010000; // Activate bias current for diode test (4k7 series R)
     adc_init(); // Configure ADC
 
     /*** In State ***/
     while(1) {
         voltage = adc_read();
-        GPIObits.GP5 = 0;
-        GPIObits.GP5 = 1;
+        LATAbits.LATA5 = 0;
+        LATAbits.LATA5 = 1;
         NOP();NOP();NOP();NOP();NOP();NOP();
-        GPIObits.GP5 = 0;
+        LATAbits.LATA5 = 0;
         for (i=0;i<16;i++) {
-            GPIObits.GP5 = 0;
-            GPIObits.GP5 = 1;
-            GPIObits.GP5 = 0;
-            GPIObits.GP5 = voltage & 1;
+            LATAbits.LATA5 = 0;
+            LATAbits.LATA5 = 1;
+            LATAbits.LATA5 = 0;
+            LATAbits.LATA5 = voltage & 1;
             voltage = voltage / 2;
         }
-        GPIObits.GP5 = 0;
+        LATAbits.LATA5 = 0;
 
         if (check_button()) {
             next = ST_CONTINUITY_IDLE;  // Cycle to next mode
@@ -274,8 +287,8 @@ void state_diode_idle() {
     /*** Enter State ***/
     unbeep(); // Silence BEEP
     // Configure IO
-    TRISIO = 0b00001001; // Set up GP0 (probe) and GP3 (button) as inputs
-    GPIO   = 0b00010000; // Activate bias current for diode test (4k7 series R)
+    TRISA = 0b00001001; // Set up GP0 (probe) and GP3 (button) as inputs
+    LATA = 0b00010000; // Activate bias current for diode test (4k7 series R)
     adc_init(); // Configure ADC
 
     /*** In State ***/
@@ -303,7 +316,7 @@ void state_diode_beep() {
 
     /*** Enter State ***/
     beep(); // Start beeper
-    GPIObits.GP5 = 1; // Turn on LED
+    LATAbits.LATA5 = 1; // Turn on LED
 
     /*** In State ***/
     while(samples < DIODE_BEEP_TIME) {
