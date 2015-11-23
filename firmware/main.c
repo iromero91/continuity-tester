@@ -39,21 +39,31 @@
 #pragma config LPBOREN = OFF    // Low Power Brown-out Reset enable bit (LPBOR is disabled)
 #pragma config LVP = OFF        // Low-Voltage Programming Enable (High-voltage on MCLR/VPP must be used for programming)
 
+#define LFINTOSC_FREQ 31000 /* 31kHz LFINTOSC */
+
+#define VCC 3.0
+#define RP 22000.0
+#define RN 4700.0
+#define ADC_VREF 1.024
+#define ADC_COUNTS 1024
+#define ADC_VOLT(x) (uint16_t)(ADC_COUNTS * (x) / ADC_VREF)
+#define ADC_OHM(x) ADC_VOLT(1/(1/RN + 1/(x)) * VCC / (RP + 1/(1/RN + 1/(x))))
+
 // Time before falling into sleep mode
 #define IDLE_TIME 5000 /* ~100s */
 
 // Continuity test constants
-#define OPEN_TRESHOLD (3<<6)  /* ~200Ω */
-#define SHORT_TRESHOLD (2<<6) /* ~150Ω */
+#define OPEN_TRESHOLD ADC_OHM(150.0)
+#define SHORT_TRESHOLD ADC_OHM(100.0)
 #define LATCH_TIME 4     /* ~60ms */
 
 // Diode test constants
-#define DIODE_TRESHOLD_MAX (290<<6) /* ~0.7v */
-#define DIODE_TRESHOLD_MIN (25<<6)  /* ~0.075v */
+#define DIODE_TRESHOLD_MAX ADC_VOLT(0.6)
+#define DIODE_TRESHOLD_MIN ADC_VOLT(0.07)
 #define DIODE_BEEP_TIME 7     /* ~0.12s */
 
 #define BEEP_FREQ 1333.33
-#define BEEP_PERIOD (31000 / BEEP_FREQ)
+#define BEEP_PERIOD (uint16_t)(LFINTOSC_FREQ / BEEP_FREQ)
 
 // Tester states
 typedef enum state_t {
@@ -86,18 +96,23 @@ void unbeep() {
 void adc_init() {
     ANSELA = 0b00000001; // Use AN0
     ADCON1bits.ADCS = 0b111; // Use FRC clock
-    ADCON1bits.ADFM = 0; // LEFT justified format
+    ADCON1bits.ADFM = 1; // Right justified format
     ADCON1bits.ADPREF = 0b00; // Reference tied to VCC
 }
 
-// Time: 2.6ms sample acq, 5.7ms including call.
+
 uint16_t adc_read () {
+    // Turn on voltage reference
+    FVRCON = 0b10000001; // 1x gain for ADC
+    while (!FVRCONbits.FVRRDY) NOP(); // Wait until FVR is ready
+    ADCON1bits.ADPREF = 0b11; // Set ADC reference to FVR
     // Acquire ADC sample
     ADCON0bits.CHS = 0;  // Channel 0 (GP0)
     ADCON0bits.ADON = 1; // Turn on ADC
     ADCON0bits.GO = 1; // Start conversion
     while (ADCON0bits.GO_nDONE) NOP(); // Wait for result
     ADCON0bits.ADON = 0; // Turn off ADC
+    FVRCON = 0; // Turn off FVR
     return (ADRESH<<8) + ADRESL;
 }
 
