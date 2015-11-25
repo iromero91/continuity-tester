@@ -1,4 +1,4 @@
-update=Mon 16 Nov 2015 11:30:41 PM CST
+update=Mon 23 Nov 2015 04:41:14 PM CST
 version=1
 last_client=kicad
 [pcbnew]
@@ -33,5 +33,5 @@ LibName1=power
 LibName2=device
 LibName3=conn
 LibName4=microchip_pic12mcu
-LibName5=powerint
-LibName6=audio
+LibName5=audio
+LibName6=linear
